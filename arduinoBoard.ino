@@ -9,11 +9,11 @@
 // Fill in the hostname of your broker
 #define SECRET_BROKER "106.12.34.4"
 #define MQTT_USER "luhuafeng"
-#define MQTT_PASS "*********"
-#define SUBSCRIBE_TOPIC "mtopic"
-#define PUBLISH_TOPIC "mtopic"
+#define MQTT_PASS "125436qq!"
+#define SUBSCRIBE_TOPIC_COMMAND "mtopic/cmdtopic"
+#define PUBLISH_TOPIC_REPORT "mtopic/rpttopic"
 
-#define SSL_CONNECT
+#define SSL_CONNECT_NONE
 
 // Fill in the boards public certificate
 const char SECRET_CERTIFICATE[] = R"(
@@ -50,9 +50,7 @@ unsigned long lastMillis = 0;
 void setup() {
   Serial.begin(115200);
   while (!Serial);
-
   if (!ECCX08.begin()) {
-    Serial.println("No ECCX08 present!");
     while (1);
   }
   // Set a callback to get the current time
@@ -72,79 +70,69 @@ void setup() {
   // called when the MQTTClient receives a message
   mqttClient.onMessage(onMessageReceived);
   // DI Configure
-  pinMode(31, OUTPUT);          // PA22 TC4-W0  D0
-  pinMode(32, OUTPUT);          // PA23 TC4-W1  D1
-  // digitalWrite(31, HIGH);
-  // digitalWrite(31, LOW);
-  // int val = analogRead(3);
-  //
+  for (int idx = 0; idx <= 1; idx++) {
+    pinMode(idx, OUTPUT);
+  }
 }
 
 void loop() {
-  if (nbAccess.status() != NB_READY || gprs.status() != GPRS_READY) {
-    connectNB();
-  }
-  if (!mqttClient.connected()) {
-    connectMQTT();
-  }
-  // poll for new MQTT messages and send keep alives
-  mqttClient.poll();
-  // publish a message roughly every 5 seconds.
-  if (millis() - lastMillis > 5000) {
+  if (nbAccess.status() != NB_READY || gprs.status() != GPRS_READY) connectNB();
+  if (!mqttClient.connected()) connectMQTT();
+  mqttClient.poll(); // poll for new MQTT messages and send keep alives
+  if (millis() - lastMillis > 5000) { // publish a message roughly every 5 seconds.
     lastMillis = millis();
     publishMessage();
   }
 }
 
 unsigned long getTime() {
-  // get the current time from the NB module
-  return nbAccess.getTime();
+  return nbAccess.getTime(); // get the current time from the NB module
 }
 
 void connectNB() {
-  Serial.println("Attempting to connect to the cellular network");
   while ((nbAccess.begin(pinnumber) != NB_READY) ||
          (gprs.attachGPRS() != GPRS_READY)) {
-    // failed, retry
-    Serial.print(".");
     delay(1000);
   }
-  Serial.println("You're connected to the cellular network");
 }
 
 void connectMQTT() {
-  Serial.print("Attempting to MQTT broker: ");
-  Serial.println(broker);
-  while (!mqttClient.connect(broker, 1883)) {
-    // failed, retry
-    Serial.print(".");
-    delay(5000);
-  }
-  Serial.println();
-  Serial.println("You're connected to the MQTT broker");
-  // subscribe to a topic
-  mqttClient.subscribe(SUBSCRIBE_TOPIC);
+  while (!mqttClient.connect(broker, 1883)) delay(5000);
+  mqttClient.subscribe(SUBSCRIBE_TOPIC_COMMAND);
 }
 
 void publishMessage() {
-  Serial.println("Publishing message");
-  // send message, the Print interface can be used to set the message contents
-  mqttClient.beginMessage(PUBLISH_TOPIC);
-  mqttClient.print("hello ");
-  mqttClient.print(millis());
+  Serial.println("Read AO");
+  int val1 = analogRead(A0);
+  int val2 = analogRead(A1);
+  Serial.println(val1);
+  Serial.println(val2);
+  Serial.println("Send Topic");
+  mqttClient.beginMessage(PUBLISH_TOPIC_REPORT);
+  mqttClient.print("{\"Level1\":\"");
+  mqttClient.print(val1 / 100);
+  mqttClient.print(".");
+  mqttClient.print(val1 % 100);
+  mqttClient.print("\",\"Level2\":\"");
+  mqttClient.print(val2 / 100);
+  mqttClient.print(".");
+  mqttClient.print(val2 % 100);
+  mqttClient.print("\"}");
   mqttClient.endMessage();
 }
 
 void onMessageReceived(int messageSize) {
-  // we received a message, print out the topic and contents
-  Serial.print("Received a message with topic '");
-  Serial.print(mqttClient.messageTopic());
-  Serial.print("', length ");
-  Serial.print(messageSize);
-  Serial.println(" bytes:");
-  // use the Stream interface to print the contents
-  while (mqttClient.available()) {
-    Serial.print((char)mqttClient.read());
+  Serial.println("Receive Topic");
+  byte commandContent[2];
+  int i = 0;
+  while ((i <= 2) && (mqttClient.available())){
+    commandContent[i] = mqttClient.read();
+    i++;
   }
+  Serial.print(commandContent[0] - 48);
+  Serial.print(commandContent[1] - 48);
   Serial.println();
+  if (((commandContent[0] >= 48) && (commandContent[0] <= 49)) && ((commandContent[1] == 48) || (commandContent[1] == 49))) {
+    digitalWrite((commandContent[0] - 48), (commandContent[1] - 48));
+  }
 }
