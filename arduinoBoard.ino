@@ -53,9 +53,15 @@ MqttClient    mqttClient(nbClient);
 
 unsigned long lastMillis = 0;
 
-int pump1 = 0;
-int pump2 = 0;
-int pump3 = 0;
+unsigned int pump1 = 0;
+unsigned int pump2 = 0;
+unsigned int pump3 = 0;
+unsigned int alarmPumpStatus = 0;
+
+unsigned int waterLevel1 = 0;
+unsigned int waterLevel2 = 0;
+unsigned int waterLevelUpLimit   = 365;
+unsigned int waterLevelDownLimit = 265;
 
 WDTZero MyWatchDoggy; // Define WDT
 
@@ -121,16 +127,17 @@ void publishMessage() {
   mqttClient.beginMessage(PUBLISH_TOPIC_REPORT);
   const int capacity = JSON_ARRAY_SIZE(3) + 3*JSON_OBJECT_SIZE(3);
   StaticJsonDocument<capacity> doc;
-  int val1 = analogRead(A0);
+  waterLevel1 = analogRead(A0);
   JsonObject waterLevel = doc.createNestedObject();
   waterLevel["n"] = "water_level";
   waterLevel["u"] = "cm";
-  waterLevel["v"] = val1;
-  int val2 = analogRead(A1);
+  waterLevel["v"] = waterLevel1;
+  pumpCommand();
+  waterLevel2 = analogRead(A1);
   JsonObject current = doc.createNestedObject();
   current["n"] = "pump_current";
   current["u"] = "A";
-  current["v"] = val2;
+  current["v"] = waterLevel2;
   JsonObject pumpStatus = doc.createNestedObject();
   pumpStatus["n"] = "pump_status";
   pumpStatus["u"] = "";
@@ -146,17 +153,35 @@ void publishMessage() {
 }
 
 void onMessageReceived(int messageSize) {
-  const int capacity = JSON_OBJECT_SIZE(4);
+  const int capacity = JSON_OBJECT_SIZE(10);
   StaticJsonDocument<capacity> doc;
   deserializeJson(doc, mqttClient);
-  pump1 = doc["p1"].as<int>();
-  pump2 = doc["p2"].as<int>();
-  pump3 = doc["p3"].as<int>();
-  digitalWrite(0, pump1);
-  digitalWrite(1, pump2);
-  digitalWrite(2, pump3);
+  if (!(doc["p1"].isNull())) pump1 = doc["p1"].as<int>();
+  if (!(doc["p2"].isNull())) pump2 = doc["p2"].as<int>();
+  if (!(doc["p3"].isNull())) pump3 = doc["p3"].as<int>();
+  if (!(doc["WLUL"].isNull())) waterLevelUpLimit   = doc["WLUL"].as<int>();
+  if (!(doc["WLDL"].isNull())) waterLevelDownLimit = doc["WLDL"].as<int>();
+  pumpCommand();
   ledTwinkle(5,200);
   publishMessage();
+}
+
+void pumpCommand() {
+  if (waterLevel1 >= waterLevelUpLimit) {
+    alarmPumpStatus = 1;
+  }
+  if (waterLevel1 <= waterLevelDownLimit) {
+    alarmPumpStatus = 0;
+  }
+  if (alarmPumpStatus == 1) {
+    digitalWrite(0, 1);
+    digitalWrite(1, 1);
+    digitalWrite(2, 1);
+  } else {
+    digitalWrite(0, pump1);
+    digitalWrite(1, pump2);
+    digitalWrite(2, pump3);
+  }
 }
 
 void ledTwinkle(int onoffloopnum, int delaytime){
