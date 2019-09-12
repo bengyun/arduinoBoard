@@ -9,27 +9,17 @@
 #define SECRET_PINNUMBER ""
 
 // Fill in the hostname of your broker
-#define SECRET_BROKER "47.88.225.240"
+#define SECRET_BROKER "<Broker Host>"
 #define SECRET_PORT 1883
-#define MQTT_USER "28d39cd5-3757-42de-9a59-1bb1fdefd4db"
-#define MQTT_PASS "486d392b-23fb-4734-815c-f00f4f793f46"
-#define SUBSCRIBE_TOPIC_COMMAND "channels/776396e2-979d-4991-94c3-7318ea1746aa/messages"
-#define PUBLISH_TOPIC_REPORT "channels/ba22f57d-642e-4b82-9718-5e3b68809ac0/messages"
-
-#define SSL_CONNECT_NONE
-
-#define LED_ON 1
-#define LED_OFF 0
+#define MQTT_USER "<Thing ID>"
+#define MQTT_PASS "<Thing Key>"
+#define SUBSCRIBE_TOPIC_COMMAND "<Command Topic>"
+#define PUBLISH_TOPIC_REPORT "<Report Topic>"
 
 // Fill in the boards public certificate
 const char SECRET_CERTIFICATE[] = R"(
 -----BEGIN CERTIFICATE-----
-MIIBLDCB06ADAgECAgEBMAoGCCqGSM49BAMCMB0xGzAZBgNVBAMTEjAxMjMxNzI4MzVCN0NFMTlF
-RTAgFw0xOTA4MTQxMTAwMDBaGA8yMDUwMDgxNDExMDAwMFowHTEbMBkGA1UEAxMSMDEyMzE3Mjgz
-NUI3Q0UxOUVFMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZ66BTGtYqAqeusVlZsJROuAVDJh1
-WDPLIfRitwCnXLhf2pTu9k9jh5DcJiGuMQxsEtWId96M0YAkPV4ijcgUmaMCMAAwCgYIKoZIzj0E
-AwIDSAAwRQIgD03feTKgmv/GZu4mnBMfAGWbA/yv/bn57Ba/2OpQlPsCIQCx/VzOLChE5VWm7ms+
-LxCvy0zO5Y42/knmHNuRBV0bAQ==
+
 -----END CERTIFICATE-----
 )";
 
@@ -45,29 +35,46 @@ GPRS gprs;
 NBClient      nbClient;            // Used for the TCP socket connection
 BearSSLClient sslClient(nbClient); // Used for SSL/TLS connection, integrates with ECC508
 
+// #define SSL_CONNECT
 #ifdef SSL_CONNECT
 MqttClient    mqttClient(sslClient);
 #else
 MqttClient    mqttClient(nbClient);
 #endif
 
+#define WATCH_DOG
+#ifdef WATCH_DOG
+WDTZero MyWatchDoggy;
+#endif
+
 unsigned long lastMillis = 0;
 
-unsigned int pump1 = 0;
-unsigned int pump2 = 0;
-unsigned int pump3 = 0;
+unsigned int pump1Cmd = 0;
+unsigned int pump2Cmd = 0;
+unsigned int pump3Cmd = 0;
 unsigned int alarmPumpStatus = 0;
+unsigned int pump1Real = 0;
+unsigned int pump2Real = 0;
+unsigned int pump3Real = 0;
 
-unsigned int waterLevel1 = 0;
-unsigned int waterLevel2 = 0;
 unsigned int waterLevelUpLimit   = 365;
 unsigned int waterLevelDownLimit = 265;
-
-WDTZero MyWatchDoggy; // Define WDT
+unsigned int waterLevel1 = 0;
+unsigned int waterLevel2 = 0;
 
 void setup() {
-  if (!ECCX08.begin()) {
-    while (1);
+  // DI Configure
+  pinMode(0, OUTPUT);
+  pinMode(1, OUTPUT);
+  pinMode(2, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
+#ifdef WATCH_DOG
+  MyWatchDoggy.setup(WDT_SOFTCYCLE1M); // Set WDT 1 minute
+#endif
+  // Check ECCX08
+  while (!ECCX08.begin()) {
+    // Show User
+    ledTwinkle(1, 100);
   }
   // Set a callback to get the current time
   // used to validate the servers certificate
@@ -85,24 +92,41 @@ void setup() {
   // Set the message callback, this function is
   // called when the MQTTClient receives a message
   mqttClient.onMessage(onMessageReceived);
-  // DI Configure
-  pinMode(0, OUTPUT);
-  pinMode(1, OUTPUT);
-  pinMode(2, OUTPUT);
-  pinMode(LED_BUILTIN, OUTPUT);
-  MyWatchDoggy.setup(WDT_SOFTCYCLE1M);  // initialize WDT-softcounter refesh cycle on 1m interval
-  ledTwinkle(1, 5000);
+  // Show User
+  ledTwinkle(1, 500);
+  ledTwinkle(1, 1500);
+  ledTwinkle(1, 500);
+  ledTwinkle(1, 1500);
+  ledTwinkle(1, 500);
 }
 
 void loop() {
-  if (nbAccess.status() != NB_READY || gprs.status() != GPRS_READY) connectNB();
+  // ↓↓↓Setup network connect and mqtt connect↓↓↓
+  if (nbAccess.status() != NB_READY || gprs.status() != GPRS_READY) {
+#ifdef WATCH_DOG
+    MyWatchDoggy.clear(); // Refresh WDT
+#endif
+    connectNB();
+#ifdef WATCH_DOG
+    MyWatchDoggy.clear(); // Refresh WDT
+#endif
+  }
   if (!mqttClient.connected()) connectMQTT();
+  // ↑↑↑Setup network connect and mqtt connect↑↑↑
+
+  // ↓↓↓Regular work↓↓↓
+#ifdef WATCH_DOG
+  MyWatchDoggy.clear();  // refresh wdt
+#endif
   mqttClient.poll(); // poll for new MQTT messages and send keep alives
-  MyWatchDoggy.clear();  // refresh wdt - before it loops
-  if (millis() - lastMillis > 5000) { // publish a message roughly every 5 seconds.
+  readWaterLevel(); /* 读取ADC结果 */
+  if (millis() - lastMillis > 5000) { // publish a message every 5 seconds.
     lastMillis = millis();
     publishMessage();
+    // Show User
+    ledTwinkle(15, 100);
   }
+  // ↑↑↑Regular work↑↑↑
 }
 
 unsigned long getTime() {
@@ -112,85 +136,91 @@ unsigned long getTime() {
 void connectNB() {
   while ((nbAccess.begin(pinnumber) != NB_READY) ||
          (gprs.attachGPRS() != GPRS_READY)) {
-    ledTwinkle(3, 500);
+    // Show User
+    ledTwinkle(5, 300);
   }
 }
 
 void connectMQTT() {
   while (!mqttClient.connect(broker, SECRET_PORT)) {
-    ledTwinkle(6, 300);
+    // Show User
+    ledTwinkle(3, 500);
   }
   mqttClient.subscribe(SUBSCRIBE_TOPIC_COMMAND);
 }
 
-void publishMessage() {
-  mqttClient.beginMessage(PUBLISH_TOPIC_REPORT);
-  const int capacity = JSON_ARRAY_SIZE(3) + 3*JSON_OBJECT_SIZE(3);
-  StaticJsonDocument<capacity> doc;
+void readWaterLevel() {
   waterLevel1 = analogRead(A0);
-  JsonObject waterLevel = doc.createNestedObject();
-  waterLevel["n"] = "water_level";
-  waterLevel["u"] = "cm";
-  waterLevel["v"] = waterLevel1;
-  pumpCommand();
   waterLevel2 = analogRead(A1);
-  JsonObject current = doc.createNestedObject();
-  current["n"] = "pump_current";
-  current["u"] = "A";
-  current["v"] = waterLevel2;
-  JsonObject pumpStatus = doc.createNestedObject();
-  pumpStatus["n"] = "pump_status";
-  pumpStatus["u"] = "";
-  pumpStatus["v"] = pump1 + pump2 * 10 + pump3 * 100;
-  doc.add(waterLevel);
-  doc.add(current);
-  doc.add(pumpStatus);
+  pumpCommand();
+}
+
+void publishMessage() {
+  const int capacity = JSON_ARRAY_SIZE(3) + 3 * JSON_OBJECT_SIZE(3);
+  StaticJsonDocument<capacity> doc;
+  JsonObject jsOb1 = doc.createNestedObject();
+  jsOb1["n"] = "water_level";
+  jsOb1["u"] = "cm";
+  jsOb1["v"] = waterLevel1;
+  JsonObject jsOb2 = doc.createNestedObject();
+  jsOb2["n"] = "pump_current";
+  jsOb2["u"] = "A";
+  jsOb2["v"] = waterLevel2;
+  JsonObject jsOb3 = doc.createNestedObject();
+  jsOb3["n"] = "pump_status";
+  jsOb3["u"] = "";
+  jsOb3["v"] = pump1Real + pump2Real * 10 + pump3Real * 100;
+  doc.add(jsOb1);
+  doc.add(jsOb2);
+  doc.add(jsOb3);
   String forprint="";
   serializeJson(doc, forprint);
+  mqttClient.beginMessage(PUBLISH_TOPIC_REPORT);
   mqttClient.print(forprint);
   mqttClient.endMessage();
-  ledTwinkle(3,200);
 }
 
 void onMessageReceived(int messageSize) {
   const int capacity = JSON_OBJECT_SIZE(10);
   StaticJsonDocument<capacity> doc;
   deserializeJson(doc, mqttClient);
-  if (!(doc["p1"].isNull())) pump1 = doc["p1"].as<int>();
-  if (!(doc["p2"].isNull())) pump2 = doc["p2"].as<int>();
-  if (!(doc["p3"].isNull())) pump3 = doc["p3"].as<int>();
-  if (!(doc["WLUL"].isNull())) waterLevelUpLimit   = doc["WLUL"].as<int>();
-  if (!(doc["WLDL"].isNull())) waterLevelDownLimit = doc["WLDL"].as<int>();
+  if (!(doc["p1"].isNull())) pump1Cmd = doc["p1"].as<int>(); /* 接收泵1命令 */
+  if (!(doc["p2"].isNull())) pump2Cmd = doc["p2"].as<int>(); /* 接收泵2命令 */
+  if (!(doc["p3"].isNull())) pump3Cmd = doc["p3"].as<int>(); /* 接收泵3命令 */
+  if (!(doc["WLUL"].isNull())) waterLevelUpLimit   = doc["WLUL"].as<int>(); /* 接收紧急排水开始液位 */
+  if (!(doc["WLDL"].isNull())) waterLevelDownLimit = doc["WLDL"].as<int>(); /* 接收紧急排水停止液位 */
   pumpCommand();
-  ledTwinkle(5,200);
   publishMessage();
+  // Show User
+  ledTwinkle(10, 150);
 }
 
 void pumpCommand() {
   if (waterLevel1 >= waterLevelUpLimit) {
-    alarmPumpStatus = 1;
+    alarmPumpStatus = HIGH;
   }
   if (waterLevel1 <= waterLevelDownLimit) {
-    alarmPumpStatus = 0;
+    alarmPumpStatus = LOW;
   }
-  if (alarmPumpStatus == 1) {
-    digitalWrite(0, 1);
-    digitalWrite(1, 1);
-    digitalWrite(2, 1);
+  if (alarmPumpStatus == HIGH) {
+    pump1Real = HIGH;
+    pump2Real = HIGH;
+    pump3Real = HIGH;
   } else {
-    digitalWrite(0, pump1);
-    digitalWrite(1, pump2);
-    digitalWrite(2, pump3);
+    pump1Real = pump1Cmd;
+    pump2Real = pump2Cmd;
+    pump3Real = pump3Cmd;
   }
+  digitalWrite(0, pump1Real);
+  digitalWrite(1, pump2Real);
+  digitalWrite(2, pump3Real);
 }
 
-void ledTwinkle(int onoffloopnum, int delaytime){
-  for (int i = 0; i < onoffloopnum; i++){
-    if (i != 0) {
-      delay(delaytime);
-    }
-    digitalWrite(LED_BUILTIN, LED_ON);
-    delay(delaytime);
-    digitalWrite(LED_BUILTIN, LED_OFF);
+void ledTwinkle(int loopTime, int delayTime){
+  for (int i = 0; i < loopTime; i++){
+    delay(delayTime >> 1);
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(delayTime >> 1);
+    digitalWrite(LED_BUILTIN, LOW);
   }
 }
