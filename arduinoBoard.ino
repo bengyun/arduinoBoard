@@ -62,6 +62,9 @@ unsigned int waterLevelDownLimit = 265;
 unsigned int waterLevel1 = 0;
 unsigned int waterLevel2 = 0;
 
+bool NETConnectStatus = false;
+bool MQTTConnectStatus = false;
+
 void setup() {
   // DI Configure
   pinMode(0, OUTPUT);
@@ -93,66 +96,68 @@ void setup() {
   // called when the MQTTClient receives a message
   mqttClient.onMessage(onMessageReceived);
   // Show User
-  ledTwinkle(1, 500);
-  ledTwinkle(1, 1500);
-  ledTwinkle(1, 500);
-  ledTwinkle(1, 1500);
-  ledTwinkle(1, 500);
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(10000);
+  digitalWrite(LED_BUILTIN, LOW);
 }
 
 void loop() {
   // ↓↓↓Setup network connect and mqtt connect↓↓↓
-  if (nbAccess.status() != NB_READY || gprs.status() != GPRS_READY) {
-#ifdef WATCH_DOG
-    MyWatchDoggy.clear(); // Refresh WDT
-#endif
-    connectNB();
-#ifdef WATCH_DOG
-    MyWatchDoggy.clear(); // Refresh WDT
-#endif
+  if (nbAccess.status() != NB_READY) { /* 判断NB连接状态，如果未连接，则指示不通讯 */
+    NETConnectStatus = false;
+    if (nbAccess.ready() > 1) { /* 初次连接或上次连接失败，则再次连接 */
+      nbAccess.begin(pinnumber, true, false);
+    }
+  } else { /* 判断NB连接状态，如果已连接，则判断GPRS */
+    if (gprs.status() != GPRS_READY) { /* 判断GPRS连接状态，如果未连接，则尝试连接 */
+      NETConnectStatus = false;
+      if (gprs.attachGPRS() == GPRS_READY) { /* 连接GPRS，如果成功，则指示网络连接有效 */
+        NETConnectStatus = true;
+      }
+    } else { /* 判断GPRS连接状态，如果已连接，则指示网络连接有效 */
+      NETConnectStatus = true;
+    }
   }
-  if (!mqttClient.connected()) connectMQTT();
+  if (NETConnectStatus) { /* 判断网络连接状态，如果连接，则判断MQTT连接 */
+    if (mqttClient.connected()) { /* 判断MQTT连接状态，如果连接，则通讯 */
+      MQTTConnectStatus = true;
+    } else { /* 判断MQTT连接状态，如果未连接，则尝试连接 */
+      MQTTConnectStatus = false;
+      if (mqttClient.connect(broker, SECRET_PORT)) { /* 连接MQTT，如果成功，则通讯 */
+        mqttClient.subscribe(SUBSCRIBE_TOPIC_COMMAND);
+        MQTTConnectStatus = true;
+      }
+    }
+  } else { /* 判断网络连接状态，如果未连接，则不通讯 */
+    MQTTConnectStatus = false;
+  }
   // ↑↑↑Setup network connect and mqtt connect↑↑↑
 
   // ↓↓↓Regular work↓↓↓
-#ifdef WATCH_DOG
-  MyWatchDoggy.clear();  // refresh wdt
-#endif
-  mqttClient.poll(); // poll for new MQTT messages and send keep alives
+  if (MQTTConnectStatus) mqttClient.poll(); // poll for new MQTT messages and send keep alives
   readWaterLevel(); /* 读取ADC结果 */
-  if (millis() - lastMillis > 5000) { // publish a message every 5 seconds.
+  if (MQTTConnectStatus && (millis() - lastMillis > 5000)) { // publish a message every 5 seconds.
     lastMillis = millis();
     publishMessage();
     // Show User
     ledTwinkle(15, 100);
   }
   // ↑↑↑Regular work↑↑↑
+#ifdef WATCH_DOG
+  MyWatchDoggy.clear();  // refresh wdt
+#endif
 }
 
 unsigned long getTime() {
   return nbAccess.getTime(); // get the current time from the NB module
 }
 
-void connectNB() {
-  while ((nbAccess.begin(pinnumber) != NB_READY) ||
-         (gprs.attachGPRS() != GPRS_READY)) {
-    // Show User
-    ledTwinkle(5, 300);
-  }
-}
-
-void connectMQTT() {
-  while (!mqttClient.connect(broker, SECRET_PORT)) {
-    // Show User
-    ledTwinkle(3, 500);
-  }
-  mqttClient.subscribe(SUBSCRIBE_TOPIC_COMMAND);
-}
-
 void readWaterLevel() {
   waterLevel1 = analogRead(A0);
   waterLevel2 = analogRead(A1);
   pumpCommand();
+  // Show User
+  ledTwinkle(1, 1000);
 }
 
 void publishMessage() {
@@ -173,7 +178,7 @@ void publishMessage() {
   doc.add(jsOb1);
   doc.add(jsOb2);
   doc.add(jsOb3);
-  String forprint="";
+  String forprint = "";
   serializeJson(doc, forprint);
   mqttClient.beginMessage(PUBLISH_TOPIC_REPORT);
   mqttClient.print(forprint);
