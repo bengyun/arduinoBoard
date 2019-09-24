@@ -62,9 +62,6 @@ unsigned int waterLevelDownLimit = 265;
 unsigned int waterLevel1 = 0;
 unsigned int waterLevel2 = 0;
 
-bool NETConnectStatus = false;
-bool MQTTConnectStatus = false;
-
 void setup() {
   // DI Configure
   pinMode(0, OUTPUT);
@@ -72,7 +69,7 @@ void setup() {
   pinMode(2, OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT);
 #ifdef WATCH_DOG
-  MyWatchDoggy.setup(WDT_SOFTCYCLE1M); // Set WDT 1 minute
+  MyWatchDoggy.setup(WDT_SOFTCYCLE2M); // Set WDT 2 minute
 #endif
   // Check ECCX08
   while (!ECCX08.begin()) {
@@ -97,52 +94,32 @@ void setup() {
   mqttClient.onMessage(onMessageReceived);
   // Show User
   digitalWrite(LED_BUILTIN, HIGH);
-  delay(10000);
+  delay(7000);
   digitalWrite(LED_BUILTIN, LOW);
+  // Fake data
+  randomSeed(analogRead(A0));
+  pinMode(SARA_PWR_ON, OUTPUT);
+  pinMode(SARA_RESETN, OUTPUT);
 }
 
 void loop() {
-  // ↓↓↓Setup network connect and mqtt connect↓↓↓
-  if (nbAccess.status() != NB_READY) { /* 判断NB连接状态，如果未连接，则指示不通讯 */
-    NETConnectStatus = false;
-    if (nbAccess.ready() > 1) { /* 初次连接或上次连接失败，则再次连接 */
-      nbAccess.begin(pinnumber, true, false);
-    }
-  } else { /* 判断NB连接状态，如果已连接，则判断GPRS */
-    if (gprs.status() != GPRS_READY) { /* 判断GPRS连接状态，如果未连接，则尝试连接 */
-      NETConnectStatus = false;
-      if (gprs.attachGPRS() == GPRS_READY) { /* 连接GPRS，如果成功，则指示网络连接有效 */
-        NETConnectStatus = true;
-      }
-    } else { /* 判断GPRS连接状态，如果已连接，则指示网络连接有效 */
-      NETConnectStatus = true;
-    }
-  }
-  if (NETConnectStatus) { /* 判断网络连接状态，如果连接，则判断MQTT连接 */
-    if (mqttClient.connected()) { /* 判断MQTT连接状态，如果连接，则通讯 */
-      MQTTConnectStatus = true;
-    } else { /* 判断MQTT连接状态，如果未连接，则尝试连接 */
-      MQTTConnectStatus = false;
-      if (mqttClient.connect(broker, SECRET_PORT)) { /* 连接MQTT，如果成功，则通讯 */
-        mqttClient.subscribe(SUBSCRIBE_TOPIC_COMMAND);
-        MQTTConnectStatus = true;
-      }
-    }
-  } else { /* 判断网络连接状态，如果未连接，则不通讯 */
-    MQTTConnectStatus = false;
-  }
-  // ↑↑↑Setup network connect and mqtt connect↑↑↑
-
-  // ↓↓↓Regular work↓↓↓
-  if (MQTTConnectStatus) mqttClient.poll(); // poll for new MQTT messages and send keep alives
   readWaterLevel(); /* 读取ADC结果 */
-  if (MQTTConnectStatus && (millis() - lastMillis > 5000)) { // publish a message every 5 seconds.
+  if (nbAccess.status() != NB_READY || gprs.status() != GPRS_READY) {
+    digitalWrite(SARA_PWR_ON, HIGH);
+    digitalWrite(SARA_RESETN, HIGH);
+    delay(100);
+    digitalWrite(SARA_RESETN, LOW);
+    connectNB();
+  }
+  if (!mqttClient.connected()) connectMQTT();
+
+  mqttClient.poll(); // poll for new MQTT messages and send keep alives
+  if (millis() - lastMillis > 5000) { // publish a message every 5 seconds.
     lastMillis = millis();
     publishMessage();
     // Show User
     ledTwinkle(15, 100);
   }
-  // ↑↑↑Regular work↑↑↑
 #ifdef WATCH_DOG
   MyWatchDoggy.clear();  // refresh wdt
 #endif
@@ -150,6 +127,22 @@ void loop() {
 
 unsigned long getTime() {
   return nbAccess.getTime(); // get the current time from the NB module
+}
+
+void connectNB() {
+  while ((nbAccess.begin(pinnumber) != NB_READY) ||
+         (gprs.attachGPRS() != GPRS_READY)) {
+    // Show User
+    ledTwinkle(5, 300);
+  }
+}
+
+void connectMQTT() {
+  while (!mqttClient.connect(broker, SECRET_PORT)) {
+    // Show User
+    ledTwinkle(3, 500);
+  }
+  mqttClient.subscribe(SUBSCRIBE_TOPIC_COMMAND);
 }
 
 void readWaterLevel() {
@@ -161,16 +154,17 @@ void readWaterLevel() {
 }
 
 void publishMessage() {
-  const int capacity = JSON_ARRAY_SIZE(3) + 3 * JSON_OBJECT_SIZE(3);
+  const int capacity = JSON_ARRAY_SIZE(3) + 2 * JSON_OBJECT_SIZE(3) + JSON_OBJECT_SIZE(4);
   StaticJsonDocument<capacity> doc;
   JsonObject jsOb1 = doc.createNestedObject();
+  jsOb1["bn"] = user;
   jsOb1["n"] = "water_level";
   jsOb1["u"] = "cm";
   jsOb1["v"] = waterLevel1;
   JsonObject jsOb2 = doc.createNestedObject();
   jsOb2["n"] = "pump_current";
   jsOb2["u"] = "A";
-  jsOb2["v"] = waterLevel2;
+  jsOb2["v"] = pump1Real * (20 + random(0, 10) - 5) + pump2Real * (20 + random(0, 10) - 5) + pump3Real * (20 + random(0, 10) - 5) + waterLevel2;
   JsonObject jsOb3 = doc.createNestedObject();
   jsOb3["n"] = "pump_status";
   jsOb3["u"] = "";
