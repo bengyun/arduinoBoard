@@ -4,222 +4,230 @@
 #include <ArduinoJson.h>
 #include <MKRNB.h>
 #include "WDTZero.h"
+#include "const.h"
 
-// NB settings
-#define SECRET_PINNUMBER ""
-
-// Fill in the hostname of your broker
-#define SECRET_BROKER "<Broker Host>"
-#define SECRET_PORT 1883
-#define MQTT_USER "<Thing ID>"
-#define MQTT_PASS "<Thing Key>"
-#define SUBSCRIBE_TOPIC_COMMAND "<Command Topic>"
-#define PUBLISH_TOPIC_REPORT "<Report Topic>"
-
-// Fill in the boards public certificate
-const char SECRET_CERTIFICATE[] = R"(
------BEGIN CERTIFICATE-----
-
------END CERTIFICATE-----
-)";
-
-const char pinnumber[]     = SECRET_PINNUMBER;
-const char broker[]        = SECRET_BROKER;
-const char user[]          = MQTT_USER;
-const char pass[]          = MQTT_PASS;
-const char* certificate    = SECRET_CERTIFICATE;
-
-NB nbAccess;
-GPRS gprs;
-
-NBClient      nbClient;            // Used for the TCP socket connection
-BearSSLClient sslClient(nbClient); // Used for SSL/TLS connection, integrates with ECC508
-
-// #define SSL_CONNECT
-#ifdef SSL_CONNECT
-MqttClient    mqttClient(sslClient);
+NB            gNBAccess;
+GPRS          gGPRS;
+NBClient      gNBClient;                // Used for the TCP socket connection
+BearSSLClient gSSLClient(gNBClient);    // Used for SSL/TLS connection, integrates with ECC508
+#if SSL_CONNECT
+MqttClient    gMQTTClient(gSSLClient);  // 通过SSL/TLS连接创建MQTT客户端
 #else
-MqttClient    mqttClient(nbClient);
+MqttClient    gMQTTClient(gNBClient);   // 通过TCP连接创建MQTT客户端
+#endif
+#if WATCH_DOG
+WDTZero       gWatchDog;                // 通过TCP连接创建MQTT客户端
 #endif
 
-#define WATCH_DOG
-#ifdef WATCH_DOG
-WDTZero MyWatchDoggy;
-#endif
+         bool  gFirstPowerUp            = true;    // 首次开机
+unsigned long  gLastPublishMillis       = 0;       // 最后发布消息的时间
+unsigned long  gLastSwitchPumpMillis    = 0;       // 最后切换水泵的时间
 
-unsigned long lastMillis = 0;
+unsigned int   gLowerLimit1P            = 225;     // 1台水泵运行的液位下线
+unsigned int   gUpperLimit1P            = 250;     // 1台水泵运行的液位上限
+unsigned int   gLowerLimit2P            = 275;     // 2台水泵运行的液位下线
+unsigned int   gUpperLimit2P            = 300;     // 2台水泵运行的液位上限
+unsigned int   gLowerLimit3P            = 325;     // 3台水泵运行的液位下线
+unsigned int   gUpperLimit3P            = 350;     // 3台水泵运行的液位上限
+unsigned int   gAutoOperatingPumpNum    = 0;       // 根据上下限运行的水泵数量
+unsigned int   gAutoOperatingP0         = 0;       // 水泵0的自动控制命令
+unsigned int   gAutoOperatingP1         = 0;       // 水泵1的自动控制命令
+unsigned int   gAutoOperatingP2         = 0;       // 水泵2的自动控制命令
+unsigned int*  gAOPP0                   = &gAutoOperatingP0; // 水泵0的自动控制命令指针
+unsigned int*  gAOPP1                   = &gAutoOperatingP1; // 水泵1的自动控制命令指针
+unsigned int*  gAOPP2                   = &gAutoOperatingP2; // 水泵2的自动控制命令指针
+unsigned int   gPump0UserCommand        = 0;       // 水泵0的远程控制命令
+unsigned int   gPump1UserCommand        = 0;       // 水泵1的远程控制命令
+unsigned int   gPump2UserCommand        = 0;       // 水泵2的远程控制命令
+unsigned int   gPump0RealCommand        = 0;       // 水泵0的真实控制命令
+unsigned int   gPump1RealCommand        = 0;       // 水泵1的真实控制命令
+unsigned int   gPump2RealCommand        = 0;       // 水泵2的真实控制命令
+unsigned int   gSensorScaleOfA0         = 1500;    // A0所安装的表的量程
+unsigned int   gSensorScaleOfA1         = 1000;    // A1所安装的表的量程
+unsigned int   gSensor0Value            = 0;       // A0读数按照量程转换后的值，即表的读数
+unsigned int   gSensor1Value            = 0;       // A1读数按照量程转换后的值，即表的读数
 
-unsigned int pump1Cmd = 0;
-unsigned int pump2Cmd = 0;
-unsigned int pump3Cmd = 0;
-unsigned int alarmPumpStatus = 0;
-unsigned int pump1Real = 0;
-unsigned int pump2Real = 0;
-unsigned int pump3Real = 0;
-
-unsigned int waterLevelUpLimit   = 365;
-unsigned int waterLevelDownLimit = 265;
-unsigned int waterLevel1 = 0;
-unsigned int waterLevel2 = 0;
-
-void setup() {
-  // DI Configure
-  pinMode(0, OUTPUT);
-  pinMode(1, OUTPUT);
-  pinMode(2, OUTPUT);
-  pinMode(LED_BUILTIN, OUTPUT);
-#ifdef WATCH_DOG
-  MyWatchDoggy.setup(WDT_SOFTCYCLE2M); // Set WDT 2 minute
-#endif
-  // Check ECCX08
-  while (!ECCX08.begin()) {
-    // Show User
-    ledTwinkle(1, 100);
-  }
-  // Set a callback to get the current time
-  // used to validate the servers certificate
-  ArduinoBearSSL.onGetTime(getTime);
-  // Set the ECCX08 slot to use for the private key
-  // and the accompanying public certificate for it
-  sslClient.setEccSlot(0, certificate);
-  // Optional, set the client id used for MQTT,
-  // each device that is connected to the broker
-  // must have a unique client id. The MQTTClient will generate
-  // a client id for you based on the millis() value if not set
-  mqttClient.setId("272a4ce58ea842de8e3065141050f1ef");
-  // Set the Username And Password if necessary
-  mqttClient.setUsernamePassword(user, pass);
-  // Set the message callback, this function is
-  // called when the MQTTClient receives a message
-  mqttClient.onMessage(onMessageReceived);
-  // Show User
-  digitalWrite(LED_BUILTIN, HIGH);
-  delay(7000);
-  digitalWrite(LED_BUILTIN, LOW);
-  // Fake data
-  randomSeed(analogRead(A0));
-  pinMode(SARA_PWR_ON, OUTPUT);
-  pinMode(SARA_RESETN, OUTPUT);
-}
-
-void loop() {
-  readWaterLevel(); /* 读取ADC结果 */
-  if (nbAccess.status() != NB_READY || gprs.status() != GPRS_READY) {
-    digitalWrite(SARA_PWR_ON, HIGH);
-    digitalWrite(SARA_RESETN, HIGH);
-    delay(100);
-    digitalWrite(SARA_RESETN, LOW);
-    connectNB();
-  }
-  if (!mqttClient.connected()) connectMQTT();
-
-  mqttClient.poll(); // poll for new MQTT messages and send keep alives
-  if (millis() - lastMillis > 5000) { // publish a message every 5 seconds.
-    lastMillis = millis();
-    publishMessage();
-    // Show User
-    ledTwinkle(15, 100);
-  }
-#ifdef WATCH_DOG
-  MyWatchDoggy.clear();  // refresh wdt
-#endif
-}
-
-unsigned long getTime() {
-  return nbAccess.getTime(); // get the current time from the NB module
-}
-
-void connectNB() {
-  while ((nbAccess.begin(pinnumber) != NB_READY) ||
-         (gprs.attachGPRS() != GPRS_READY)) {
-    // Show User
-    ledTwinkle(5, 300);
-  }
-}
-
-void connectMQTT() {
-  while (!mqttClient.connect(broker, SECRET_PORT)) {
-    // Show User
-    ledTwinkle(3, 500);
-  }
-  mqttClient.subscribe(SUBSCRIBE_TOPIC_COMMAND);
-}
-
-void readWaterLevel() {
-  waterLevel1 = analogRead(A0);
-  waterLevel2 = analogRead(A1);
-  pumpCommand();
-  // Show User
-  ledTwinkle(1, 1000);
-}
-
-void publishMessage() {
-  const int capacity = JSON_ARRAY_SIZE(3) + 2 * JSON_OBJECT_SIZE(3) + JSON_OBJECT_SIZE(4);
-  StaticJsonDocument<capacity> doc;
-  JsonObject jsOb1 = doc.createNestedObject();
-  jsOb1["bn"] = user;
-  jsOb1["n"] = "water_level";
-  jsOb1["u"] = "cm";
-  jsOb1["v"] = waterLevel1;
-  JsonObject jsOb2 = doc.createNestedObject();
-  jsOb2["n"] = "pump_current";
-  jsOb2["u"] = "A";
-  jsOb2["v"] = pump1Real * (20 + random(0, 10) - 5) + pump2Real * (20 + random(0, 10) - 5) + pump3Real * (20 + random(0, 10) - 5) + waterLevel2;
-  JsonObject jsOb3 = doc.createNestedObject();
-  jsOb3["n"] = "pump_status";
-  jsOb3["u"] = "";
-  jsOb3["v"] = pump1Real + pump2Real * 10 + pump3Real * 100;
-  doc.add(jsOb1);
-  doc.add(jsOb2);
-  doc.add(jsOb3);
-  String forprint = "";
-  serializeJson(doc, forprint);
-  mqttClient.beginMessage(PUBLISH_TOPIC_REPORT);
-  mqttClient.print(forprint);
-  mqttClient.endMessage();
-}
-
-void onMessageReceived(int messageSize) {
-  const int capacity = JSON_OBJECT_SIZE(10);
-  StaticJsonDocument<capacity> doc;
-  deserializeJson(doc, mqttClient);
-  if (!(doc["p1"].isNull())) pump1Cmd = doc["p1"].as<int>(); /* 接收泵1命令 */
-  if (!(doc["p2"].isNull())) pump2Cmd = doc["p2"].as<int>(); /* 接收泵2命令 */
-  if (!(doc["p3"].isNull())) pump3Cmd = doc["p3"].as<int>(); /* 接收泵3命令 */
-  if (!(doc["WLUL"].isNull())) waterLevelUpLimit   = doc["WLUL"].as<int>(); /* 接收紧急排水开始液位 */
-  if (!(doc["WLDL"].isNull())) waterLevelDownLimit = doc["WLDL"].as<int>(); /* 接收紧急排水停止液位 */
-  pumpCommand();
-  publishMessage();
-  // Show User
-  ledTwinkle(10, 150);
-}
-
-void pumpCommand() {
-  if (waterLevel1 >= waterLevelUpLimit) {
-    alarmPumpStatus = HIGH;
-  }
-  if (waterLevel1 <= waterLevelDownLimit) {
-    alarmPumpStatus = LOW;
-  }
-  if (alarmPumpStatus == HIGH) {
-    pump1Real = HIGH;
-    pump2Real = HIGH;
-    pump3Real = HIGH;
-  } else {
-    pump1Real = pump1Cmd;
-    pump2Real = pump2Cmd;
-    pump3Real = pump3Cmd;
-  }
-  digitalWrite(0, pump1Real);
-  digitalWrite(1, pump2Real);
-  digitalWrite(2, pump3Real);
-}
-
+// 控制LED灯闪烁
 void ledTwinkle(int loopTime, int delayTime){
-  for (int i = 0; i < loopTime; i++){
+  for (int i = 0; i < loopTime; i++) {
     delay(delayTime >> 1);
     digitalWrite(LED_BUILTIN, HIGH);
     delay(delayTime >> 1);
     digitalWrite(LED_BUILTIN, LOW);
   }
+}
+
+// 从NB模块获得当前时间
+unsigned long getTime() {
+  return gNBAccess.getTime();
+}
+
+// 连接NB模块和GPRS网络
+void connectNB() {
+  digitalWrite(SARA_PWR_ON, HIGH);
+  digitalWrite(SARA_RESETN, HIGH);
+  delay(100);
+  digitalWrite(SARA_RESETN, LOW);
+  while ((gNBAccess.begin(SECRET_PINNUMBER) != NB_READY) || (gGPRS.attachGPRS() != GPRS_READY)) {
+    ledTwinkle(5, 300);
+  }
+}
+// 连接MQTT服务器并订阅命令频道
+void connectMQTT() {
+  while (!gMQTTClient.connect(SECRET_BROKER, SECRET_PORT)) ledTwinkle(3, 500);
+  gMQTTClient.subscribe(SUBSCRIBE_TOPIC_COMMAND);
+}
+
+// 读取输入和判断输出
+void readAdcAndMakeCmd() {
+  int aAdcValue0 = analogRead(A0);
+  int aAdcValue1 = analogRead(A1);
+  gSensor0Value = (aAdcValue0 * gSensorScaleOfA0) >> 10; // Adc Value is 0-1024, change to sensorScale
+  gSensor1Value = (aAdcValue1 * gSensorScaleOfA1) >> 10; // Adc Value is 0-1024, change to sensorScale
+  pumpCommand();
+  ledTwinkle(1, 1000);
+}
+
+// 上传液位和泵指令信息
+void publishMessage() {
+  const int capacity = JSON_ARRAY_SIZE(3) + 2 * JSON_OBJECT_SIZE(3) + JSON_OBJECT_SIZE(4);
+  StaticJsonDocument<capacity> doc;
+  JsonObject jsOb1 = doc.createNestedObject();
+  jsOb1["bn"] = MQTT_USER;
+  jsOb1["n"]  = "water_level1";
+  jsOb1["u"]  = "cm";
+  jsOb1["v"]  = gSensor0Value;
+  JsonObject jsOb2 = doc.createNestedObject();
+  jsOb2["n"]  = "water_level2";
+  jsOb2["u"]  = "cm";
+  jsOb2["v"]  = gSensor1Value;
+  // jsOb2["v"] = pump1Real * (20 + random(0, 10) - 5) + pump2Real * (20 + random(0, 10) - 5) + pump3Real * (20 + random(0, 10) - 5) + sensor1Value;
+  JsonObject jsOb3 = doc.createNestedObject();
+  jsOb3["n"]  = "pump_status";
+  jsOb3["u"]  = "";
+  jsOb3["v"]  = gPump0RealCommand | (gPump1RealCommand << 1) | (gPump2RealCommand << 2); // bit0: pump1; bit1: pump2; bit2: pump3
+  // jsOb3["v"] = pump1Real + pump2Real * 10 + pump3Real * 100;
+  doc.add(jsOb1);
+  doc.add(jsOb2);
+  doc.add(jsOb3);
+  String forprint = "";
+  serializeJson(doc, forprint);
+  gMQTTClient.beginMessage(PUBLISH_TOPIC_REPORT);
+  gMQTTClient.print(forprint);
+  gMQTTClient.endMessage();
+}
+
+// 接收上位的设定
+void onMessageReceived(int messageSize) {
+  const int capacity = JSON_OBJECT_SIZE(16);
+  StaticJsonDocument<capacity> doc;
+  deserializeJson(doc, gMQTTClient);
+  if (!(doc["LL1P"].isNull())) gLowerLimit1P   = doc["LL1P"].as<int>(); /* 1台水泵运行的液位下线 */
+  if (!(doc["UL1P"].isNull())) gUpperLimit1P   = doc["UL1P"].as<int>(); /* 1台水泵运行的液位上限 */
+  if (!(doc["LL2P"].isNull())) gLowerLimit2P   = doc["LL2P"].as<int>(); /* 2台水泵运行的液位下线 */
+  if (!(doc["UL2P"].isNull())) gUpperLimit2P   = doc["UL2P"].as<int>(); /* 2台水泵运行的液位上限 */
+  if (!(doc["LL3P"].isNull())) gLowerLimit3P   = doc["LL3P"].as<int>(); /* 3台水泵运行的液位下线 */
+  if (!(doc["UL3P"].isNull())) gUpperLimit3P   = doc["UL3P"].as<int>(); /* 3台水泵运行的液位上限 */
+  if (!(doc["P0"].isNull())) gPump0UserCommand = doc["P0"].as<int>(); /* 接收泵0远程命令 */
+  if (!(doc["P1"].isNull())) gPump1UserCommand = doc["P1"].as<int>(); /* 接收泵1远程命令 */
+  if (!(doc["P2"].isNull())) gPump2UserCommand = doc["P2"].as<int>(); /* 接收泵2远程命令 */
+  pumpCommand();
+  // publishMessage();
+  ledTwinkle(5, 100); // Show User
+}
+
+// 生成和发出水泵指令
+void pumpCommand() {
+  // 根据水泵运行液位上下限，自动计算需要运行的水泵数量
+  unsigned int aAutoOperatingPumpNum = gAutoOperatingPumpNum;
+  if ((gSensor0Value <= gLowerLimit1P) && (aAutoOperatingPumpNum == 1)) aAutoOperatingPumpNum = 0;
+  if ((gSensor0Value >= gUpperLimit1P) && (aAutoOperatingPumpNum == 0)) aAutoOperatingPumpNum = 1;
+  if ((gSensor0Value <= gLowerLimit2P) && (aAutoOperatingPumpNum == 2)) aAutoOperatingPumpNum = 1;
+  if ((gSensor0Value >= gUpperLimit2P) && (aAutoOperatingPumpNum == 1)) aAutoOperatingPumpNum = 2;
+  if ((gSensor0Value <= gLowerLimit3P) && (aAutoOperatingPumpNum == 3)) aAutoOperatingPumpNum = 2;
+  if ((gSensor0Value >= gUpperLimit3P) && (aAutoOperatingPumpNum == 2)) aAutoOperatingPumpNum = 3;
+  gAutoOperatingPumpNum = aAutoOperatingPumpNum;
+  gAutoOperatingP0 = 0;       // 水泵0的运行状态
+  gAutoOperatingP1 = 0;       // 水泵1的运行状态
+  gAutoOperatingP2 = 0;       // 水泵2的运行状态
+  switch (aAutoOperatingPumpNum) {
+    case 3:
+      *gAOPP2 = 1;            // 运行3台
+    case 2:
+      *gAOPP1 = 1;            // 运行2台
+    case 1:
+      *gAOPP0 = 1;            // 运行1台
+    case 0:
+    default:
+      break;
+  }
+  gPump0RealCommand = ((gPump0UserCommand >= 1) || (gAutoOperatingP0 >= 1)) ? 1 : 0; // 通过或运算取得泵0运行命令
+  gPump1RealCommand = ((gPump1UserCommand >= 1) || (gAutoOperatingP1 >= 1)) ? 1 : 0; // 通过或运算取得泵1运行命令
+  gPump2RealCommand = ((gPump2UserCommand >= 1) || (gAutoOperatingP2 >= 1)) ? 1 : 0; // 通过或运算取得泵2运行命令
+  digitalWrite(0, gPump0RealCommand);
+  digitalWrite(1, gPump1RealCommand);
+  digitalWrite(2, gPump2RealCommand);
+}
+
+void setup() {
+  // 设置端子状态
+  pinMode(0, OUTPUT);
+  pinMode(1, OUTPUT);
+  pinMode(2, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(SARA_PWR_ON, OUTPUT);
+  pinMode(SARA_RESETN, OUTPUT);
+  // 设置随机数种子
+  randomSeed(analogRead(A0));
+  // 提示开机，闪烁1次，每次14秒
+  ledTwinkle(1, 14000);
+#if WATCH_DOG
+  gWatchDog.setup(WDT_SOFTCYCLE8M); // 设置看门狗8分钟
+#endif
+#if SSL_CONNECT
+  // SSL相关的设置
+  while (!ECCX08.begin()) ledTwinkle(1, 100); // Check ECCX08
+  ArduinoBearSSL.onGetTime(getTime); // Set a callback to get the current time used to validate the servers certificate
+  gSSLClient.setEccSlot(0, SECRET_CERTIFICATE); // Set the ECCX08 slot to use for the private key and the accompanying public certificate for it
+#endif
+  // MQTT相关的设置
+  gMQTTClient.setId(MQTT_USER); // Optional, set the client id used for MQTT, each device that is connected to the broker must have a unique client id. The MQTTClient will generate a client id for you based on the millis() value if not set
+  gMQTTClient.setUsernamePassword(MQTT_USER, MQTT_PASS); // Set the Username And Password if necessary
+  gMQTTClient.onMessage(onMessageReceived); // Set the message callback, this function is called when the MQTTClient receives a message
+}
+
+void loop() {
+  // 维护网络和MQTT服务器连接
+  if (gNBAccess.status() != NB_READY || gGPRS.status() != GPRS_READY) connectNB();
+  if (!gMQTTClient.connected()) connectMQTT();
+
+  readAdcAndMakeCmd(); // 读取输入和判断输出
+  gMQTTClient.poll(); // 获取MQTT消息并保持连接
+
+  // 上电以后首次运行，发送运行开始
+  if (gFirstPowerUp) {
+    gFirstPowerUp = false;
+    gMQTTClient.beginMessage(PUBLISH_TOPIC_REPORT);
+    gMQTTClient.print("Hello System");
+    gMQTTClient.endMessage();
+  }
+
+  unsigned long aCurrentMillis = millis(); // 获得本次开机后运行的毫秒数
+  // 距离上次发布超过5秒 或 时间已经溢出并重新计数，则发布最新的液位信息
+  if ((aCurrentMillis - gLastPublishMillis > 5000) || (aCurrentMillis - gLastPublishMillis < 0)) {
+    gLastPublishMillis = aCurrentMillis;
+    publishMessage();
+    ledTwinkle(15, 100); // 闪烁15次，每次100毫秒
+  }
+  // 距离上次发布超过1小时 或 时间已经溢出并重新计数，则交换水泵运行状态的设置指针
+  if ((aCurrentMillis - gLastSwitchPumpMillis > 36000000) || (aCurrentMillis - gLastSwitchPumpMillis < 0)) {
+    gLastSwitchPumpMillis = aCurrentMillis;
+    unsigned int* aTempAOPP = gAOPP0;
+    gAOPP0 = gAOPP1;
+    gAOPP1 = gAOPP2;
+    gAOPP2 = aTempAOPP;
+  }
+#if WATCH_DOG
+  gWatchDog.clear(); // 更新看门狗
+#endif
 }
