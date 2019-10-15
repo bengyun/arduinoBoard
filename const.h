@@ -12,6 +12,9 @@
 #define SUBSCRIBE_TOPIC_COMMAND "channels/23172b90-a025-42d1-8596-e3506e8bbdd1/messages"
 #define PUBLISH_TOPIC_REPORT    "channels/ba22f57d-642e-4b82-9718-5e3b68809ac0/messages"
 
+#define INT_SIZE                4      // INT型的字节数量
+#define FLASH_SELECT            5      // digital pin for flash chip CS pin
+
 // 编译开关
 #define SSL_CONNECT             false  // 开启SSL连接
 #define WATCH_DOG               true   // 开启看门狗

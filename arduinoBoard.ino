@@ -5,6 +5,9 @@
 #include <MKRNB.h>
 #include "WDTZero.h"
 #include "const.h"
+#include <SerialFlash.h>
+#include <SD.h>
+#include <SPI.h>
 
 NB            gNBAccess;
 GPRS          gGPRS;
@@ -46,6 +49,31 @@ unsigned int   gSensorScaleOfA0         = 1500;    // A0所安装的表的量程
 unsigned int   gSensorScaleOfA1         = 1000;    // A1所安装的表的量程
 unsigned int   gSensor0Value            = 0;       // A0读数按照量程转换后的值，即表的读数
 unsigned int   gSensor1Value            = 0;       // A1读数按照量程转换后的值，即表的读数
+
+#define SETTING_NUMBER 9
+         bool  gFlashMemoryOK           = false;   // 储存有效
+         char* gSettingSaveTable[SETTING_NUMBER] = {   // 在FLash中保存设置的文件名
+  "LL1P",
+  "UL1P",
+  "LL2P",
+  "UL2P",
+  "LL3P",
+  "UL3P",
+  "P0",
+  "P1",
+  "P2"
+};
+unsigned int*  gRemoteSettingTable[SETTING_NUMBER] = { // 远程设置的指针表
+  &gLowerLimit1P,
+  &gUpperLimit1P,
+  &gLowerLimit2P,
+  &gUpperLimit2P,
+  &gLowerLimit3P,
+  &gUpperLimit3P,
+  &gPump0UserCommand,
+  &gPump1UserCommand,
+  &gPump2UserCommand
+};
 
 // 控制LED灯闪烁
 void ledTwinkle(int loopTime, int delayTime){
@@ -119,18 +147,26 @@ void publishMessage() {
 
 // 接收上位的设定
 void onMessageReceived(int messageSize) {
-  const int capacity = JSON_OBJECT_SIZE(16);
+  const int capacity = JSON_OBJECT_SIZE(SETTING_NUMBER << 1);
   StaticJsonDocument<capacity> doc;
   deserializeJson(doc, gMQTTClient);
-  if (!(doc["LL1P"].isNull())) gLowerLimit1P   = doc["LL1P"].as<int>(); /* 1台水泵运行的液位下线 */
-  if (!(doc["UL1P"].isNull())) gUpperLimit1P   = doc["UL1P"].as<int>(); /* 1台水泵运行的液位上限 */
-  if (!(doc["LL2P"].isNull())) gLowerLimit2P   = doc["LL2P"].as<int>(); /* 2台水泵运行的液位下线 */
-  if (!(doc["UL2P"].isNull())) gUpperLimit2P   = doc["UL2P"].as<int>(); /* 2台水泵运行的液位上限 */
-  if (!(doc["LL3P"].isNull())) gLowerLimit3P   = doc["LL3P"].as<int>(); /* 3台水泵运行的液位下线 */
-  if (!(doc["UL3P"].isNull())) gUpperLimit3P   = doc["UL3P"].as<int>(); /* 3台水泵运行的液位上限 */
-  if (!(doc["P0"].isNull())) gPump0UserCommand = doc["P0"].as<int>(); /* 接收泵0远程命令 */
-  if (!(doc["P1"].isNull())) gPump1UserCommand = doc["P1"].as<int>(); /* 接收泵1远程命令 */
-  if (!(doc["P2"].isNull())) gPump2UserCommand = doc["P2"].as<int>(); /* 接收泵2远程命令 */
+  for (int fileIdx = 0; fileIdx < SETTING_NUMBER; fileIdx++) { /* 循环读取设置并写入RAM */
+    if (!(doc[gSettingSaveTable[fileIdx]].isNull()))
+      *(gRemoteSettingTable[fileIdx]) = doc[gSettingSaveTable[fileIdx]].as<int>();
+  }
+  if (gFlashMemoryOK) {   /* 储存有效 */
+    if (!(doc["CLEAN"].isNull())) {  /* 清空 SPI FLASH */
+      SerialFlash.eraseAll();
+      while (SerialFlash.ready() == false) {} // wait, 30 seconds to 2 minutes for most chips
+    } else {
+      for (int fileIdx = 0; fileIdx < 9; fileIdx++) {  /* 循环写入FLASH */
+        if (!SerialFlash.exists(gSettingSaveTable[fileIdx])) SerialFlash.createErasable(gSettingSaveTable[fileIdx], INT_SIZE);
+        SerialFlashFile file = SerialFlash.open(gSettingSaveTable[fileIdx]);
+        file.erase();
+        file.write((char*)(gRemoteSettingTable[fileIdx]), INT_SIZE);
+      }
+    }
+  }
   pumpCommand();
   // publishMessage();
   ledTwinkle(5, 100); // Show User
@@ -179,8 +215,16 @@ void setup() {
   pinMode(SARA_RESETN, OUTPUT);
   // 设置随机数种子
   randomSeed(analogRead(A0));
-  // 提示开机，闪烁1次，每次14秒
-  ledTwinkle(1, 14000);
+  // 读取配置
+  if (SerialFlash.begin(FLASH_SELECT)) {
+    gFlashMemoryOK = true;
+    for (int fileIdx = 0; fileIdx < SETTING_NUMBER; fileIdx++) {  /* 循环读取FLASH */
+      if (SerialFlash.exists(gSettingSaveTable[fileIdx]))
+      SerialFlash.open(gSettingSaveTable[fileIdx]).read((char*)(gRemoteSettingTable[fileIdx]), INT_SIZE);
+    }
+  }
+  // 提示开机，闪烁1次，每次5秒
+  ledTwinkle(1, 5000);
 #if WATCH_DOG
   gWatchDog.setup(WDT_SOFTCYCLE8M); // 设置看门狗8分钟
 #endif
