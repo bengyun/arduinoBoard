@@ -123,18 +123,21 @@ void publishMessage() {
   JsonObject jsOb1 = doc.createNestedObject();
   jsOb1["bn"] = MQTT_USER;
   jsOb1["n"]  = "water_level1";
+  // jsOb1["n"]  = "water_level";
   jsOb1["u"]  = "cm";
   jsOb1["v"]  = gSensor0Value;
   JsonObject jsOb2 = doc.createNestedObject();
   jsOb2["n"]  = "water_level2";
   jsOb2["u"]  = "cm";
+  // jsOb2["n"]  = "pump_current";
+  // jsOb2["u"]  = "A";
   jsOb2["v"]  = gSensor1Value;
   // jsOb2["v"] = pump1Real * (20 + random(0, 10) - 5) + pump2Real * (20 + random(0, 10) - 5) + pump3Real * (20 + random(0, 10) - 5) + sensor1Value;
   JsonObject jsOb3 = doc.createNestedObject();
   jsOb3["n"]  = "pump_status";
   jsOb3["u"]  = "";
-  jsOb3["v"]  = gPump0RealCommand | (gPump1RealCommand << 1) | (gPump2RealCommand << 2); // bit0: pump1; bit1: pump2; bit2: pump3
-  // jsOb3["v"] = pump1Real + pump2Real * 10 + pump3Real * 100;
+  // jsOb3["v"]  = gPump0RealCommand | (gPump1RealCommand << 1) | (gPump2RealCommand << 2); // bit0: pump1; bit1: pump2; bit2: pump3
+  jsOb3["v"] = gPump0RealCommand + gPump1RealCommand * 10 + gPump2RealCommand * 100;
   doc.add(jsOb1);
   doc.add(jsOb2);
   doc.add(jsOb3);
