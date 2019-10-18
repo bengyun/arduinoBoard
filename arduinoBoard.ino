@@ -45,7 +45,7 @@ unsigned int   gPump2UserCommand        = 0;       // 水泵2的远程控制命�
 unsigned int   gPump0RealCommand        = 0;       // 水泵0的真实控制命令
 unsigned int   gPump1RealCommand        = 0;       // 水泵1的真实控制命令
 unsigned int   gPump2RealCommand        = 0;       // 水泵2的真实控制命令
-unsigned int   gSensorScaleOfA0         = 1500;    // A0所安装的表的量程
+unsigned int   gSensorScaleOfA0         = 1000;    // A0所安装的表的量程
 unsigned int   gSensorScaleOfA1         = 1000;    // A1所安装的表的量程
 unsigned int   gSensor0Value            = 0;       // A0读数按照量程转换后的值，即表的读数
 unsigned int   gSensor1Value            = 0;       // A1读数按照量程转换后的值，即表的读数
@@ -123,16 +123,16 @@ void publishMessage() {
   JsonObject jsOb1 = doc.createNestedObject();
   jsOb1["bn"] = MQTT_USER;
   jsOb1["n"]  = "water_level1";
-  // jsOb1["n"]  = "water_level";
+  //jsOb1["n"]  = "water_level";
   jsOb1["u"]  = "cm";
   jsOb1["v"]  = gSensor0Value;
   JsonObject jsOb2 = doc.createNestedObject();
   jsOb2["n"]  = "water_level2";
   jsOb2["u"]  = "cm";
-  // jsOb2["n"]  = "pump_current";
-  // jsOb2["u"]  = "A";
   jsOb2["v"]  = gSensor1Value;
-  // jsOb2["v"] = pump1Real * (20 + random(0, 10) - 5) + pump2Real * (20 + random(0, 10) - 5) + pump3Real * (20 + random(0, 10) - 5) + sensor1Value;
+  //jsOb2["n"]  = "pump_current";
+  //jsOb2["u"]  = "A";
+  //jsOb2["v"] = gPump0RealCommand * (20 + random(0, 10) - 5) + gPump1RealCommand * (20 + random(0, 10) - 5) + gPump2RealCommand * (20 + random(0, 10) - 5) + gSensor1Value;
   JsonObject jsOb3 = doc.createNestedObject();
   jsOb3["n"]  = "pump_status";
   jsOb3["u"]  = "";
@@ -219,13 +219,15 @@ void setup() {
   // 设置随机数种子
   randomSeed(analogRead(A0));
   // 读取配置
+  /*
   if (SerialFlash.begin(FLASH_SELECT)) {
     gFlashMemoryOK = true;
-    for (int fileIdx = 0; fileIdx < SETTING_NUMBER; fileIdx++) {  /* 循环读取FLASH */
+    for (int fileIdx = 0; fileIdx < SETTING_NUMBER; fileIdx++) {  // 循环读取FLASH
       if (SerialFlash.exists(gSettingSaveTable[fileIdx]))
       SerialFlash.open(gSettingSaveTable[fileIdx]).read((char*)(gRemoteSettingTable[fileIdx]), INT_SIZE);
     }
   }
+  */
   // 提示开机，闪烁1次，每次5秒
   ledTwinkle(1, 5000);
 #if WATCH_DOG
@@ -244,11 +246,13 @@ void setup() {
 }
 
 void loop() {
+
+  readAdcAndMakeCmd(); // 读取输入和判断输出
+
   // 维护网络和MQTT服务器连接
   if (gNBAccess.status() != NB_READY || gGPRS.status() != GPRS_READY) connectNB();
   if (!gMQTTClient.connected()) connectMQTT();
 
-  readAdcAndMakeCmd(); // 读取输入和判断输出
   gMQTTClient.poll(); // 获取MQTT消息并保持连接
 
   // 上电以后首次运行，发送运行开始
@@ -260,8 +264,8 @@ void loop() {
   }
 
   unsigned long aCurrentMillis = millis(); // 获得本次开机后运行的毫秒数
-  // 距离上次发布超过5秒 或 时间已经溢出并重新计数，则发布最新的液位信息
-  if ((aCurrentMillis - gLastPublishMillis > 5000) || (aCurrentMillis - gLastPublishMillis < 0)) {
+  // 距离上次发布超过15秒 或 时间已经溢出并重新计数，则发布最新的液位信息
+  if ((aCurrentMillis - gLastPublishMillis > 15000) || (aCurrentMillis - gLastPublishMillis < 0)) {
     gLastPublishMillis = aCurrentMillis;
     publishMessage();
     ledTwinkle(15, 100); // 闪烁15次，每次100毫秒

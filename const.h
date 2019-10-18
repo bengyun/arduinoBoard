@@ -9,7 +9,7 @@
 #define SECRET_PORT             1883
 #define MQTT_USER               "4e2b4730-c5bc-4b1d-8fa1-b810d3aca96d"
 #define MQTT_PASS               "c19c6e4e-a881-4a7f-b83b-908da0e39c29"
-#define SUBSCRIBE_TOPIC_COMMAND "channels/<none>/messages"
+#define SUBSCRIBE_TOPIC_COMMAND "channels/none/messages"
 #define PUBLISH_TOPIC_REPORT    "channels/ba22f57d-642e-4b82-9718-5e3b68809ac0/messages"
 
 #define INT_SIZE                4      // INT型的字节数量
