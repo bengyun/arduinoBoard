@@ -3,15 +3,16 @@
 
 #define CODE_VERSION            "V20191113"
 // 填写设备的MQTT信息
-#define SECRET_BROKER           "106.12.34.4"
+#define SECRET_BROKER           "121.41.1.169"
 #define SECRET_PORT             1883
-#define MQTT_USER               "4e2b4730-c5bc-4b1d-8fa1-b810d3aca96d"
-#define MQTT_PASS               "c19c6e4e-a881-4a7f-b83b-908da0e39c29"
-#define SUBSCRIBE_TOPIC_COMMAND "channels/none/messages"
-#define PUBLISH_TOPIC_REPORT    "channels/ba22f57d-642e-4b82-9718-5e3b68809ac0/messages"
+#define MQTT_USER               "28d39cd5-3757-42de-9a59-1bb1fdefd4db"
+#define MQTT_PASS               "486d392b-23fb-4734-815c-f00f4f793f46"
+#define SUBSCRIBE_TOPIC_COMMAND "channels/ba22f57d-642e-4b82-9718-5e3b68809ac0/messages"
+#define PUBLISH_TOPIC_REPORT    "channels/776396e2-979d-4991-94c3-7318ea1746aa/messages"
 // 如果SIM卡有PIN，需要填写SIM卡的PIN
 #define SECRET_PINNUMBER ""
 // 编译开关
+#define DEBUG_PUMP              false              // 开启调试模式
 #define SSL_CONNECT             false              // 开启SSL连接
 #define WATCH_DOG               true               // 开启看门狗
 // 常量定义
@@ -44,12 +45,12 @@ unsigned int   gSensor1Value            = 0;       // A1读数按照量程转换
 /* 功能码设定 */
 #define SETTING_NUMBER 11                          // 功能码数量
 /* 功能码内存区域定义 */
-unsigned int   gLowerLimit1P            = 225;     // 1台水泵运行的液位下线
-unsigned int   gUpperLimit1P            = 250;     // 1台水泵运行的液位上限
-unsigned int   gLowerLimit2P            = 275;     // 2台水泵运行的液位下线
-unsigned int   gUpperLimit2P            = 300;     // 2台水泵运行的液位上限
-unsigned int   gLowerLimit3P            = 325;     // 3台水泵运行的液位下线
-unsigned int   gUpperLimit3P            = 350;     // 3台水泵运行的液位上限
+unsigned int   gLowerLimit1P            = 325;     // 1台水泵运行的液位下线
+unsigned int   gUpperLimit1P            = 350;     // 1台水泵运行的液位上限
+unsigned int   gLowerLimit2P            = 375;     // 2台水泵运行的液位下线
+unsigned int   gUpperLimit2P            = 400;     // 2台水泵运行的液位上限
+unsigned int   gLowerLimit3P            = 425;     // 3台水泵运行的液位下线
+unsigned int   gUpperLimit3P            = 450;     // 3台水泵运行的液位上限
 unsigned int   gPump0UserCommand        = 0;       // 水泵0的远程控制命令
 unsigned int   gPump1UserCommand        = 0;       // 水泵1的远程控制命令
 unsigned int   gPump2UserCommand        = 0;       // 水泵2的远程控制命令

@@ -11,6 +11,7 @@
 #include "const.h"
 
 // gNBAccess.getTime()
+// ADC_BATTERY              // 电压ADC
 
 // 控制LED灯闪烁
 void ledTwinkle(int loopTime, int delayTime){
@@ -72,12 +73,12 @@ void onMessageReceived(int messageSize) {
 /*------ 报告系统版本 ------*/
   if (!(doc["VERSION"].isNull())) gReportCodeVersion = true;
 /*------ 将功能码持久化到Flash储存中 ------*/
-  if (gFlashMemoryOK) {   /* 储存有效 */
+  if (gFlashMemoryOK) {
     if (!(doc["CLEAN"].isNull())) {
       SerialFlash.eraseAll();                 // 清空 SPI FLASH
       while (SerialFlash.ready() == false) {} // wait, 30 seconds to 2 minutes for most chips
     } else {
-      for (int fileIdx = 0; fileIdx < 9; fileIdx++) {  /* 循环写入FLASH */
+      for (int fileIdx = 0; fileIdx < 9; fileIdx++) {
         if (!SerialFlash.exists(gSettingSaveTable[fileIdx])) SerialFlash.createErasable(gSettingSaveTable[fileIdx], INT_SIZE);
         SerialFlashFile file = SerialFlash.open(gSettingSaveTable[fileIdx]);
         file.erase();
@@ -91,6 +92,13 @@ void onMessageReceived(int messageSize) {
       const char* updateServer = doc["UDSEVR"].as<char*>();
             int   updatePort   = doc["UDPORT"].as<int>();
       const char* updatePath   = doc["UDPATH"].as<char*>();
+#if DEBUG_PUMP
+      Serial.println("OTA");
+      Serial.print("UDSEVR: ");Serial.println(updateServer);
+      Serial.print("UDPORT: ");Serial.println(updatePort);
+      Serial.print("UDPATH: ");Serial.println(updatePath);
+#endif
+      while ((gNBAccess.begin(SECRET_PINNUMBER) != NB_READY) || (gGPRS.attachGPRS() != GPRS_READY)) delay(500);
       if (WEB_CLIENT.connect(updateServer, updatePort)) {
         WEB_CLIENT.print("GET ");
         WEB_CLIENT.print(updatePath);
@@ -99,16 +107,29 @@ void onMessageReceived(int messageSize) {
         WEB_CLIENT.println(updateServer);
         WEB_CLIENT.println("Connection: close");
         WEB_CLIENT.println();
-        delay(1000);
+        delay(5000);
         char abgflg[4] = {'\r', '\n', '\r', '\n'};
         int  abgnum    = 0;
-        File UPDATEBIN = SD.open("UPDATE.bin");
-        while (WEB_CLIENT.available()) {
-          char c = (char)WEB_CLIENT.read();
-          if (abgnum < 4) {
-            abgnum = (c == abgflg[abgnum]) ? abgnum + 1 : 0;
+        SD.remove("UPDATE.bin");
+        File UPDATEBIN = SD.open("UPDATE.bin", FILE_WRITE);
+        unsigned long aWaitTime;
+                 bool aAvailable = true;
+        while (true) {
+          if (WEB_CLIENT.available()) {
+            aAvailable = true;
+            char c = (char)WEB_CLIENT.read();
+            if (abgnum < 4) {
+              abgnum = (c == abgflg[abgnum]) ? abgnum + 1 : 0;
+            } else {
+              UPDATEBIN.print(c);
+            }
           } else {
-            UPDATEBIN.write(c);
+            if (aAvailable) {
+              aAvailable = false;
+              aWaitTime = millis();
+              delay(50);
+            }
+            if (millis() - aWaitTime > 5000) break;
           }
         }
         WEB_CLIENT.stop();
@@ -158,8 +179,11 @@ void pumpCommand() {
 }
 
 void setup() {
+#if DEBUG_PUMP
   Serial.begin(9600);
-  
+  while (!Serial) {}
+  Serial.println("Begin");
+#endif
 /*------ 初始化DO端子状态 ------*/
   pinMode(0, OUTPUT);
   pinMode(1, OUTPUT);
@@ -182,7 +206,7 @@ void setup() {
   }
 /*------ 初始化看门狗 ------*/
 #if WATCH_DOG
-  gWatchDog.setup(WDT_SOFTCYCLE8M); // 设置看门狗8分钟
+  gWatchDog.setup(WDT_SOFTCYCLE16M); // 设置看门狗16分钟
 #endif
 /*------ 初始化SSL证书 ------*/
 #if SSL_CONNECT
@@ -209,14 +233,23 @@ void loop() {
   pumpCommand();
 /*------ 维护网络和MQTT服务器连接 ------*/
   if (gNBAccess.status() != NB_READY || gGPRS.status() != GPRS_READY) {
-    digitalWrite(SARA_PWR_ON, LOW);digitalWrite(SARA_RESETN, HIGH); // POWER OFF
+    digitalWrite(SARA_PWR_ON, LOW);
+    digitalWrite(SARA_RESETN, HIGH);
     delay(100);
-    digitalWrite(SARA_PWR_ON, HIGH);digitalWrite(SARA_RESETN, LOW); // POWER ON
+    digitalWrite(SARA_PWR_ON, HIGH);
+    digitalWrite(SARA_RESETN, LOW);
     while ((gNBAccess.begin(SECRET_PINNUMBER) != NB_READY) || (gGPRS.attachGPRS() != GPRS_READY)) ledTwinkle(5, 300);
+#if DEBUG_PUMP
+    Serial.println("NB connected");
+#endif
   }
   if (!gMQTTClient.connected()) {
     while (!gMQTTClient.connect(SECRET_BROKER, SECRET_PORT)) ledTwinkle(3, 500);
     gMQTTClient.subscribe(SUBSCRIBE_TOPIC_COMMAND);
+    gReportCodeVersion = true;
+#if DEBUG_PUMP
+    Serial.println("MQTT Connected");
+#endif
   }
 /*------ 获取MQTT消息并保持连接 ------*/
   gMQTTClient.poll();
@@ -226,6 +259,9 @@ void loop() {
     gMQTTClient.beginMessage(PUBLISH_TOPIC_REPORT);
     gMQTTClient.print("HiSys,MyVerIs"CODE_VERSION);
     gMQTTClient.endMessage();
+#if DEBUG_PUMP
+    Serial.println("Say Hello");
+#endif
   }
 /*------ 执行定期任务 ------*/
   unsigned long aCurrentMillis = millis();                  // 获得本次开机后运行的毫秒数
