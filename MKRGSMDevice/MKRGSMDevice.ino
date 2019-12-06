@@ -117,12 +117,13 @@ void onMessageReceived(int messageSize) {
         WEB_CLIENT.println();
         char abgflg[4] = {'\r', '\n', '\r', '\n'};
         int  abgnum    = 0;
-        uint8_t dataBuffer[1024];
+        uint8_t dataBuffer[512];
         if(SD.exists("UPDATE.bin")) SD.remove("UPDATE.bin");
         File UPDATEBIN = SD.open("UPDATE.bin", FILE_WRITE);
         unsigned long aWaitTime, filesize = 0;
                  bool aAvailable = true;
-        while (WEB_CLIENT.connected()) {
+                 uint8_t aWebClientCnnL, aWebClientCnnC = 1;
+        do {
           while (WEB_CLIENT.available()) {
             aAvailable = true;
             if (abgnum < 4) {
@@ -132,7 +133,7 @@ void onMessageReceived(int messageSize) {
               Serial.print(c);
 #endif
             } else {
-              int aDateLength = WEB_CLIENT.read(dataBuffer, 1024);
+              int aDateLength = WEB_CLIENT.read(dataBuffer, 512);
               UPDATEBIN.write(dataBuffer, aDateLength);
 #if DEBUG_PUMP
               filesize += aDateLength;
@@ -151,8 +152,9 @@ void onMessageReceived(int messageSize) {
 #if DEBUG_PUMP
           Serial.print("*");
 #endif
-          if (millis() - aWaitTime > 5000) break;
-        }
+          aWebClientCnnL = aWebClientCnnC;
+          aWebClientCnnC = WEB_CLIENT.connected();
+        } while ((aWebClientCnnL == 1) || (aWebClientCnnC == 1));
         WEB_CLIENT.stop();
         UPDATEBIN.close();
 #if DEBUG_PUMP
@@ -169,10 +171,10 @@ void onMessageReceived(int messageSize) {
         Serial.print("OTA: Sizeof(UPDATE.bin)= ");Serial.println(filesize);
 #endif
         do {
-          if (filesize > 1024) {
-            filesize -= 1024;
-            UPDATEBIN.read(dataBuffer, 1024);
-            MD5::MD5Update(&context, dataBuffer, 1024);
+          if (filesize > 512) {
+            filesize -= 512;
+            UPDATEBIN.read(dataBuffer, 512);
+            MD5::MD5Update(&context, dataBuffer, 512);
           } else {
             UPDATEBIN.read(dataBuffer, filesize);
             MD5::MD5Update(&context, dataBuffer, filesize);
