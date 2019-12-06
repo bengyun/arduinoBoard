@@ -1,18 +1,23 @@
+/* Change Log
+ *  VGSM20191205: 根据MQTT指令，在线更新控制程序
+ *  VGSM20191206: OTA更新文件获取，逐byte略过响应头，按buffer下载文件
+ */
+
 #ifndef CONST_H
 #define CONST_H
 
-#define CODE_VERSION            "V20191113"
+#define CODE_VERSION            "VNB20191206"
 // 填写设备的MQTT信息
 #define SECRET_BROKER           "121.41.1.169"
 #define SECRET_PORT             1883
-#define MQTT_USER               "28d39cd5-3757-42de-9a59-1bb1fdefd4db"
-#define MQTT_PASS               "486d392b-23fb-4734-815c-f00f4f793f46"
-#define SUBSCRIBE_TOPIC_COMMAND "channels/ba22f57d-642e-4b82-9718-5e3b68809ac0/messages"
-#define PUBLISH_TOPIC_REPORT    "channels/776396e2-979d-4991-94c3-7318ea1746aa/messages"
+#define MQTT_USER               "fbbd76aa-f7e0-4fef-85aa-16a4ad7044e0"
+#define MQTT_PASS               "ea51f7d3-ed7a-44d6-8eb4-0f49dac0c27c"
+#define SUBSCRIBE_TOPIC_COMMAND "channels/967f0ae0-b3a5-4f96-880b-756980b3b807/messages"
+#define PUBLISH_TOPIC_REPORT    "channels/ba22f57d-642e-4b82-9718-5e3b68809ac0/messages"
 // 如果SIM卡有PIN，需要填写SIM卡的PIN
-#define SECRET_PINNUMBER ""
+#define SECRET_PINNUMBER        ""
 // 编译开关
-#define DEBUG_PUMP              false              // 开启调试模式
+#define DEBUG_PUMP              true               // 开启调试模式
 #define SSL_CONNECT             false              // 开启SSL连接
 #define WATCH_DOG               true               // 开启看门狗
 // 常量定义
@@ -29,6 +34,7 @@ const char SECRET_CERTIFICATE[] = R"(
          bool  gReportCodeVersion       = true;    // 首次开机报告代码版本
          bool  gFlashMemoryOK           = false;   // Flash储存有效
          bool  gSDCardOK                = false;   // SDCard储存有效
+         bool  gNeedReconnect           = false;   // 需要重连
 /* 运行时状态 */
 unsigned int   gAutoOperatingPumpNum    = 0;       // 根据上下限运行的水泵数量
 unsigned int   gAutoOperatingP0         = 0;       // 水泵0的自动控制命令
@@ -84,6 +90,13 @@ unsigned int*  gRemoteSettingTable[SETTING_NUMBER] = { // 远程设置的指针�
   &gSensorScaleOfA0,                               // A0所安装的表的量程
   &gSensorScaleOfA1                                // A1所安装的表的量程
 };
+/* 隐性功能码 */
+/* VERSION */                                      // 上报版本的命令
+/* CLEAN   */                                      // 初始设定命令
+/* UDSEVR  */                                      // 更新服务器域名或IP
+/* UDPORT  */                                      // 更新服务器端口
+/* UDPATH  */                                      // 更新文件路径
+/* UDMD5P  */                                      // 更新文件MD5
 /* 定义工具类 */
 NB            gNBAccess;
 GPRS          gGPRS;
