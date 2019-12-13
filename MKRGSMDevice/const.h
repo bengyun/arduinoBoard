@@ -1,12 +1,13 @@
 /* Change Log
  *  VGSM20191205: 根据MQTT指令，在线更新控制程序
  *  VGSM20191206: OTA更新文件获取，逐byte略过响应头，按buffer下载文件
+ *  VGSM20191213: OTA更新文件获取，改为分段下载
  */
 
 #ifndef CONST_H
 #define CONST_H
 
-#define CODE_VERSION            "VGSM20191206SPEED"
+#define CODE_VERSION            "VGSM20191213"
 // 填写设备的MQTT信息
 #define SECRET_BROKER           "121.41.1.169"
 #define SECRET_PORT             1883
@@ -27,6 +28,7 @@
 #define INT_SIZE                4                  // INT型的字节数量
 #define SD_SELECT               4                  // SD卡的CS引脚
 #define FLASH_SELECT            5                  // Flash芯片的CS引脚
+#define DOWNLOAD_SLICE          (10 * 1024)        // 分段下载区片长度
 // 如果开启了SSL连接，需要填写设备的公钥
 const char SECRET_CERTIFICATE[] = R"(
 -----BEGIN CERTIFICATE-----

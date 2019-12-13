@@ -1,6 +1,7 @@
 #include <ArduinoBearSSL.h>
 #include <ArduinoECCX08.h>
 #include <ArduinoMqttClient.h>
+#include <ArduinoHttpClient.h>
 #include <ArduinoJson.h>
 #include <MKRGSM.h>
 #include <SerialFlash.h>
@@ -15,10 +16,134 @@
 // ADC_BATTERY              // 电压ADC
 
 // 控制LED灯闪烁
-void ledTwinkle(int loopTime, int delayTime){
+void ledTwinkle(int loopTime, int delayTime) {
   for (int i = 0; i < loopTime; i++) {
     digitalWrite(LED_BUILTIN, HIGH);delay(delayTime >> 1);
     digitalWrite(LED_BUILTIN,  LOW);delay(delayTime >> 1);
+  }
+}
+
+int downloadFile(HttpClient iHttpWebClient, const char* iUpdatePath) {
+  unsigned long    aFileTotalSize = 0;    // 文件总体积
+  unsigned long    aFileLoaddSize = 0;    // 已下载体积
+  unsigned long    aTimeoutStart  = 0;    // 超时防止用
+           int     aStatusCode    = 0;    // 响应状态码
+           uint8_t aDataReadBuffer[512];  // 下载缓存区
+  iHttpWebClient.get(iUpdatePath);
+  aStatusCode = iHttpWebClient.responseStatusCode();
+  if (aStatusCode == 200) {
+    aFileTotalSize = iHttpWebClient.contentLength();
+    iHttpWebClient.stop();
+#if DEBUG_PUMP
+    Serial.print("OTA: Fetch File Size: ");Serial.println(aFileTotalSize);
+#endif
+  } else {
+    iHttpWebClient.stop();
+#if DEBUG_PUMP
+    Serial.print("OTA: Fetch Fail: ");Serial.println(aStatusCode);
+#endif
+    return -1;
+  }
+  if(SD.exists("UPDATETP.bin")) SD.remove("UPDATETP.bin");
+  File aUpdateTempFile = SD.open("UPDATETP.bin", FILE_WRITE);
+  do {
+    unsigned long aLoadUpponSize = (aFileTotalSize - aFileLoaddSize > DOWNLOAD_SLICE) ? (aFileLoaddSize + DOWNLOAD_SLICE - 1) : (aFileTotalSize - 1);
+    iHttpWebClient.beginRequest();
+    iHttpWebClient.get(iUpdatePath);
+    iHttpWebClient.sendHeader("Range", "bytes=" + String(aFileLoaddSize) + "-" + String(aLoadUpponSize));
+    iHttpWebClient.endRequest();
+    aStatusCode = iHttpWebClient.responseStatusCode();
+    if (aStatusCode == 206) {
+      if(SD.exists("Slice.bin")) SD.remove("Slice.bin");
+      File aSliceFile = SD.open("Slice.bin", FILE_WRITE);
+      int aSliceLen = iHttpWebClient.contentLength();
+      int aSliceDon = 0;
+      aTimeoutStart = millis();
+#if DEBUG_PUMP
+      Serial.print("OTA: Slice Range: ");Serial.print(aFileLoaddSize);Serial.print(" - ");Serial.println(aLoadUpponSize);
+#endif
+      while ( (iHttpWebClient.connected() || iHttpWebClient.available()) &&
+              (!iHttpWebClient.endOfBodyReached()) &&
+              ((millis() - aTimeoutStart) < 5000) ) {
+        while (iHttpWebClient.available()) {
+          int aDateLength = iHttpWebClient.read(aDataReadBuffer, 512);
+          aSliceFile.write(aDataReadBuffer, aDateLength);
+          aTimeoutStart = millis();        // Reset the timeout counter
+          aSliceDon += aDateLength;
+#if DEBUG_PUMP
+          Serial.print("OTA: Loadding: ");Serial.print(aSliceDon);Serial.print(" / ");Serial.println(aSliceLen);
+#endif
+        }
+#if DEBUG_PUMP
+        Serial.print("*");
+#endif
+      }
+      iHttpWebClient.stop();
+      aSliceFile.close();
+      if (aSliceDon == aSliceLen) {
+        aSliceFile = SD.open("Slice.bin", FILE_READ);
+        do {
+          int aReadSize = aSliceFile.read(aDataReadBuffer, 512);
+          aUpdateTempFile.write(aDataReadBuffer, aReadSize);
+          aSliceDon -= aReadSize;
+        } while(aSliceDon > 0);
+        aSliceFile.close();
+        aFileLoaddSize = aLoadUpponSize + 1;
+        SD.remove("Slice.bin");
+#if DEBUG_PUMP
+        Serial.println("OTA: Slice Downloaded");
+#endif
+      } else {
+        SD.remove("Slice.bin");
+#if DEBUG_PUMP
+        Serial.println("OTA: Slice Try Again");
+#endif
+      }
+    }
+  } while (aFileLoaddSize < aFileTotalSize);
+  aUpdateTempFile.close();
+#if DEBUG_PUMP
+  Serial.println("OTA: TempFile Downloaded");
+#endif
+  return 0;
+}
+
+int checkFile(const char* aUpdateMD5) {
+  if(SD.exists("UPDATETP.bin")) {
+    uint8_t aDataReadBuffer[512]; // 下载缓存区
+    unsigned char *  hash   = (unsigned char *) malloc(16); // 预分配地址
+    MD5_CTX context;
+    if(SD.exists("UPDATE.bin")) SD.remove("UPDATE.bin");
+    File aUpdateFile = SD.open("UPDATE.bin", FILE_WRITE);
+    File aUpdateTempFile = SD.open("UPDATETP.bin", FILE_READ);
+    size_t aFileSize = aUpdateTempFile.size();
+#if DEBUG_PUMP
+    Serial.print("OTA: MD5 Sizeof(UPDATETP.bin)= ");Serial.println(aFileSize);
+#endif
+    MD5::MD5Init(&context);
+    do {
+      int aReadSize = aUpdateTempFile.read(aDataReadBuffer, 512);
+      aUpdateFile.write(aDataReadBuffer, aReadSize);
+      MD5::MD5Update(&context, aDataReadBuffer, aReadSize);
+      aFileSize -= aReadSize;
+    } while(aFileSize > 0);
+    aUpdateFile.close();
+    aUpdateTempFile.close();
+    SD.remove("UPDATETP.bin");
+    MD5::MD5Final(hash, &context);
+    char *md5str = MD5::make_digest(hash, 16);
+#if DEBUG_PUMP
+    Serial.print("OTA: MD5(");Serial.print(md5str);Serial.println(")");
+#endif
+    int aResult = (strcmp(md5str, aUpdateMD5) == 0) ? 0 : -1;
+    free(md5str);
+    free(hash);
+    return aResult;
+  } else {
+#if DEBUG_PUMP
+    Serial.print("OTA: UPDATETP.bin Not Exists");
+#endif
+    return -2;
   }
 }
 
@@ -104,105 +229,28 @@ void onMessageReceived(int messageSize) {
       Serial.print("UDPATH: ");Serial.println(updatePath);
       Serial.print("UDMD5P: ");Serial.println(updateMD5);
 #endif
+/*------ 下载Sketch ------*/
       while ((gGSMAccess.begin(SECRET_PINNUMBER) != GSM_READY) || (gGPRS.attachGPRS(SECRET_GPRS_APN, SECRET_GPRS_LOGIN, SECRET_GPRS_PASSWORD) != GPRS_READY)) delay(500);
       gNeedReconnect = true;
-/*------ 下载Sketch ------*/
-#if DEBUG_PUMP
-      Serial.println("OTA: Download UPDATE.bin");
+#if SSL_CONNECT
+      HttpClient aHttpWebClient = HttpClient(gGSMSSLClient, updateServer, updatePort);
+#else
+      HttpClient aHttpWebClient = HttpClient(gGSMClient, updateServer, updatePort);
 #endif
-      if (WEB_CLIENT.connect(updateServer, updatePort)) {
-        WEB_CLIENT.print("GET ");WEB_CLIENT.print(updatePath);WEB_CLIENT.println(" HTTP/1.1");
-        WEB_CLIENT.print("Host: ");WEB_CLIENT.println(updateServer);
-        WEB_CLIENT.println("Connection: close");
-        WEB_CLIENT.println();
-        char abgflg[4] = {'\r', '\n', '\r', '\n'};
-        int  abgnum    = 0;
-        uint8_t dataBuffer[512];
-        if(SD.exists("UPDATE.bin")) SD.remove("UPDATE.bin");
-        File UPDATEBIN = SD.open("UPDATE.bin", FILE_WRITE);
-        unsigned long aWaitTime, filesize = 0;
-                 bool aAvailable = true;
-                 uint8_t aWebClientCnnL, aWebClientCnnC = 1;
-        do {
-          while (WEB_CLIENT.available()) {
-            aAvailable = true;
-            if (abgnum < 4) {
-              char c = (char)WEB_CLIENT.read();
-              abgnum = (c == abgflg[abgnum]) ? abgnum + 1 : 0;
-#if DEBUG_PUMP
-              Serial.print(c);
-#endif
-            } else {
-              int aDateLength = WEB_CLIENT.read(dataBuffer, 512);
-              UPDATEBIN.write(dataBuffer, aDateLength);
-#if DEBUG_PUMP
-              filesize += aDateLength;
-              Serial.print("Download Size: ");Serial.println(filesize);
-#endif
-            }
-          }
-          if (aAvailable) {
-            aAvailable = false;
-            aWaitTime = millis();
-            UPDATEBIN.flush();
-#if DEBUG_PUMP
-            Serial.print("OTA: Download Suspend ");Serial.println(aWaitTime);
-#endif
-          }
-#if DEBUG_PUMP
-          Serial.print("*");
-#endif
-          aWebClientCnnL = aWebClientCnnC;
-          aWebClientCnnC = WEB_CLIENT.connected();
-        } while ((aWebClientCnnL == 1) || (aWebClientCnnC == 1));
-        WEB_CLIENT.stop();
-        UPDATEBIN.close();
-#if DEBUG_PUMP
-        Serial.println("OTA: Download Stop ");
-#endif
+      downloadFile(aHttpWebClient, updatePath);
 /*------ 校验Sketch ------*/
-        bool reboot = false;
-        MD5_CTX context;
-        unsigned char * hash = (unsigned char *) malloc(16);
-        MD5::MD5Init(&context);
-        UPDATEBIN = SD.open("UPDATE.bin", FILE_READ);
-        filesize = UPDATEBIN.size();
+      if(checkFile(updateMD5) == 0) {
+        /*------ 决定是否重启CPU ------*/
 #if DEBUG_PUMP
-        Serial.print("OTA: Sizeof(UPDATE.bin)= ");Serial.println(filesize);
+        Serial.println("OTA: Reboot");
 #endif
-        do {
-          if (filesize > 512) {
-            filesize -= 512;
-            UPDATEBIN.read(dataBuffer, 512);
-            MD5::MD5Update(&context, dataBuffer, 512);
-          } else {
-            UPDATEBIN.read(dataBuffer, filesize);
-            MD5::MD5Update(&context, dataBuffer, filesize);
-            break;
-          }
-        } while(true);
-        UPDATEBIN.close();
-        MD5::MD5Final(hash, &context);
-        char *md5str = MD5::make_digest(hash, 16);
-        if (strcmp(md5str, updateMD5) == 0) reboot = true; // 比较计算出的文件MD5值与命令MD5值
+        gWatchDog.setup(WDT_HARDCYCLE62m);
+        while (true) {}
+      } else {
+        SD.remove("UPDATE.bin");
 #if DEBUG_PUMP
-        Serial.print("OTA: MD5(");Serial.print(md5str);Serial.println(")");
+        Serial.println("OTA: Fail");
 #endif
-        free(md5str);
-        free(hash);
-/*------ 决定是否重启CPU ------*/
-        if (reboot) {
-#if DEBUG_PUMP
-          Serial.println("OTA: Reboot");
-#endif
-          gWatchDog.setup(WDT_HARDCYCLE62m);
-          while (true) {}
-        } else {
-#if DEBUG_PUMP
-          Serial.println("OTA: Fail");
-#endif
-          SD.remove("UPDATE.bin");
-        }
       }
     }
   }
